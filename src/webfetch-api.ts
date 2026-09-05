@@ -1203,7 +1203,7 @@ export function redactStaticWebFetchUrl(value: unknown): string {
 	}
 }
 
-function redactErrorText(value: unknown): string {
+export function redactErrorText(value: unknown): string {
 	const text = typeof value === "string" ? value : String(value);
 	const urlsRedacted = text.replace(
 		/https?:\/\/[^\s<>"']+/gi,

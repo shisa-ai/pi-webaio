@@ -2,11 +2,17 @@ import type { AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import {
+	DEFAULT_MAX_OUTPUT_CHARS,
+	DEFAULT_WEBFETCH_BROWSER,
+	DEFAULT_WEBFETCH_OS,
+	DEFAULT_WEBFETCH_TIMEOUT_MS,
 	fetchPage,
+	redactErrorText,
 	redactStaticWebFetchUrl,
 	type StaticWebFetchOptions,
 	type StaticWebFetchResult,
 } from "./webfetch-api.ts";
+import { redactSecrets } from "./redact.ts";
 
 interface FetchToolParams extends StaticWebFetchOptions {
 	url: string;
@@ -18,16 +24,93 @@ interface BatchFetchToolParams {
 	verbose?: boolean;
 }
 
-interface FetchToolDetails {
+interface FetchResultDetails {
 	ok: boolean;
+	kind?: "content";
 	url: string;
 	finalUrl?: string;
-	status?: number;
+	redirects: string[];
+	httpStatus?: number;
+	statusText?: string;
+	contentType?: string;
 	format?: string;
 	charCount?: number;
 	truncated?: boolean;
+	title?: string;
+	author?: string;
+	published?: string;
+	site?: string;
+	language?: string;
+	wordCount?: number;
+	browser?: string;
+	os?: string;
+	downloadedBytes?: number;
+	elapsedMs: number;
+	browserEscalated?: false;
+	remoteFallbackUsed?: false;
+	persisted?: false;
+	proxyUsed?: boolean;
+	targetPinning?: "local" | "proxy-dependent";
 	errorCode?: string;
+	errorPhase?: string;
+	retryable?: boolean;
+	contentOmitted?: true;
+}
+
+interface FetchToolDetails extends FetchResultDetails {
+	verbose?: boolean;
+	maxChars?: number;
+	fetchResult?: FetchResultDetails;
+	started?: true;
+	status?: "connecting" | "done" | "error";
+	progress?: number;
+	phase?: string;
+	error?: true;
+	errorText?: string;
+	userErrorSummary?: string;
 	toolOutputTruncated?: boolean;
+}
+
+interface SafeBatchRequestDetails {
+	url: string;
+	browser: string;
+	os: string;
+	maxChars: number;
+	timeoutMs: number;
+	format: string;
+	removeImages: boolean;
+	includeReplies: boolean | "extractors";
+	proxy?: string;
+}
+
+interface BatchFetchResultDetails {
+	total: number;
+	succeeded: number;
+	failed: number;
+	batchConcurrency: number;
+	items: Array<{
+		index: number;
+		request: SafeBatchRequestDetails;
+		status: "done" | "error";
+		progress: 1;
+		result?: FetchResultDetails;
+		error?: string;
+	}>;
+}
+
+interface BatchProgressDetails {
+	items: Array<{
+		index: number;
+		url: string;
+		status: "done" | "error";
+		progress: 1;
+		error?: string;
+	}>;
+	total: number;
+	completed: number;
+	succeeded: number;
+	failed: number;
+	batchConcurrency: number;
 }
 
 interface BatchFetchToolDetails {
@@ -35,7 +118,12 @@ interface BatchFetchToolDetails {
 	completed: number;
 	succeeded: number;
 	failed: number;
-	items: FetchToolDetails[];
+	items: FetchResultDetails[];
+	verbose?: boolean;
+	started?: true;
+	batchProgress?: BatchProgressDetails;
+	batchResult?: BatchFetchResultDetails;
+	spinnerTick?: number;
 	toolOutputTruncated?: boolean;
 }
 
@@ -142,24 +230,96 @@ function optionsFrom(params: FetchToolParams, signal: AbortSignal | undefined): 
 	};
 }
 
-function detailsFrom(result: StaticWebFetchResult): FetchToolDetails {
+function detailsFrom(result: StaticWebFetchResult): FetchResultDetails {
 	if (!result.ok) {
 		return {
 			ok: false,
-			url: result.url,
-			finalUrl: result.finalUrl,
-			status: result.error.statusCode,
+			url: redactStaticWebFetchUrl(result.url),
+			finalUrl: result.finalUrl ? redactStaticWebFetchUrl(result.finalUrl) : undefined,
+			redirects: result.redirects.map(redactStaticWebFetchUrl),
+			httpStatus: result.error.statusCode,
+			elapsedMs: result.elapsedMs,
 			errorCode: result.error.code,
+			errorPhase: result.error.phase,
+			retryable: result.error.retryable,
 		};
 	}
 	return {
 		ok: true,
-		url: result.url,
-		finalUrl: result.finalUrl,
-		status: result.statusCode,
+		kind: "content",
+		url: redactStaticWebFetchUrl(result.url),
+		finalUrl: redactStaticWebFetchUrl(result.finalUrl),
+		redirects: result.redirects.map(redactStaticWebFetchUrl),
+		httpStatus: result.statusCode,
+		statusText: redactSecrets(result.statusText),
+		contentType: redactSecrets(result.contentType ?? ""),
 		format: result.format,
 		charCount: result.outputChars,
 		truncated: result.truncated,
+		title: redactSecrets(result.title),
+		author: redactSecrets(result.author),
+		published: redactSecrets(result.published),
+		site: redactSecrets(result.site),
+		language: redactSecrets(result.language),
+		wordCount: result.wordCount,
+		browser: result.browser,
+		os: result.os,
+		downloadedBytes: result.downloadedBytes,
+		elapsedMs: result.elapsedMs,
+		browserEscalated: result.browserEscalated,
+		remoteFallbackUsed: result.remoteFallbackUsed,
+		persisted: result.persisted,
+		proxyUsed: result.proxyUsed,
+		targetPinning: result.targetPinning,
+		contentOmitted: true,
+	};
+}
+
+function safeProxyDetails(proxy: string): string {
+	try {
+		const parsed = new URL(proxy);
+		if (!["http:", "https:", "socks5:"].includes(parsed.protocol)) return "[REDACTED:proxy]";
+		return redactStaticWebFetchUrl(parsed.href);
+	} catch {
+		return "[REDACTED:proxy]";
+	}
+}
+
+function safeBatchRequestDetails(request: FetchToolParams): SafeBatchRequestDetails {
+	return {
+		url: redactStaticWebFetchUrl(request.url),
+		browser: String(request.browser ?? DEFAULT_WEBFETCH_BROWSER),
+		os: String(request.os ?? DEFAULT_WEBFETCH_OS),
+		maxChars: request.maxChars ?? DEFAULT_MAX_OUTPUT_CHARS,
+		timeoutMs: request.timeoutMs ?? DEFAULT_WEBFETCH_TIMEOUT_MS,
+		format: request.format ?? "markdown",
+		removeImages: request.removeImages ?? false,
+		includeReplies: request.includeReplies ?? "extractors",
+		...(request.proxy ? { proxy: safeProxyDetails(request.proxy) } : {}),
+	};
+}
+
+function singleToolDetails(
+	params: FetchToolParams,
+	result: StaticWebFetchResult,
+	toolOutputTruncated: boolean,
+): FetchToolDetails {
+	const fetchResult = detailsFrom(result);
+	const errorText = result.ok ? undefined : redactErrorText(responseText(result));
+	return {
+		...fetchResult,
+		url: result.ok ? (fetchResult.finalUrl ?? fetchResult.url) : fetchResult.url,
+		verbose: params.verbose ?? false,
+		maxChars: params.maxChars ?? DEFAULT_MAX_OUTPUT_CHARS,
+		fetchResult: result.ok ? fetchResult : undefined,
+		started: true,
+		status: result.ok ? "done" : "error",
+		progress: 1,
+		phase: result.ok ? "done" : result.error.phase,
+		error: result.ok ? undefined : true,
+		errorText,
+		userErrorSummary: result.ok ? undefined : redactErrorText(result.error.message),
+		toolOutputTruncated,
 	};
 }
 
@@ -261,6 +421,32 @@ function batchResponseText(requests: FetchToolParams[], results: StaticWebFetchR
 		.join("\n\n---\n\n");
 }
 
+function batchErrorText(result: Extract<StaticWebFetchResult, { ok: false }>): string {
+	const status = result.error.statusCode === undefined ? "" : ` (HTTP ${result.error.statusCode})`;
+	const message = redactErrorText(result.error.message);
+	return `Fetch failed [${result.error.code}]${status}: ${message} (phase: ${result.error.phase}; retryable: ${result.error.retryable ? "yes" : "no"})`;
+}
+
+function batchResultDetails(
+	requests: FetchToolParams[],
+	results: StaticWebFetchResult[],
+): BatchFetchResultDetails {
+	const succeeded = results.filter((result) => result.ok).length;
+	return {
+		total: results.length,
+		succeeded,
+		failed: results.length - succeeded,
+		batchConcurrency: Math.min(4, requests.length),
+		items: results.map((result, index) => ({
+			index,
+			request: safeBatchRequestDetails(requests[index]!),
+			status: result.ok ? "done" : "error",
+			progress: 1,
+			...(result.ok ? { result: detailsFrom(result) } : { error: batchErrorText(result) }),
+		})),
+	};
+}
+
 function createWebFetchTool(): ToolDefinition {
 	return {
 		name: "web_fetch",
@@ -276,13 +462,22 @@ function createWebFetchTool(): ToolDefinition {
 			const displayUrl = redactStaticWebFetchUrl(params.url);
 			onUpdate?.({
 				content: [{ type: "text", text: progressText(displayUrl) }],
-				details: { ok: false, url: displayUrl },
+				details: {
+					ok: false,
+					url: displayUrl,
+					redirects: [],
+					elapsedMs: 0,
+					started: true,
+					status: "connecting",
+					progress: 0,
+					phase: "connecting",
+				},
 			});
 			const result = await fetchPage(params.url, optionsFrom(params, signal));
 			const output = truncateToolOutput(responseText(result));
 			return {
 				content: [{ type: "text", text: output.text }],
-				details: { ...detailsFrom(result), toolOutputTruncated: output.truncated },
+				details: singleToolDetails(params, result, output.truncated),
 			};
 		},
 		renderCall(args, theme) {
@@ -321,16 +516,35 @@ function createBatchWebFetchTool(): ToolDefinition {
 			const updates = onUpdate as AgentToolUpdateCallback<BatchFetchToolDetails> | undefined;
 			const results = await runBatch(params.requests, signal, updates);
 			if (signal?.aborted) throw new DOMException("The batch fetch was aborted", "AbortError");
-			const succeeded = results.filter((result) => result.ok).length;
+			const batchResult = batchResultDetails(params.requests, results);
+			const batchProgress: BatchProgressDetails = {
+				items: batchResult.items.map(({ index, request, status, progress, error }) => ({
+					index,
+					url: request.url,
+					status,
+					progress,
+					...(error ? { error } : {}),
+				})),
+				total: batchResult.total,
+				completed: batchResult.total,
+				succeeded: batchResult.succeeded,
+				failed: batchResult.failed,
+				batchConcurrency: batchResult.batchConcurrency,
+			};
 			const output = truncateToolOutput(batchResponseText(params.requests, results));
 			return {
 				content: [{ type: "text", text: output.text }],
 				details: {
-					total: results.length,
-					completed: results.length,
-					succeeded,
-					failed: results.length - succeeded,
+					total: batchResult.total,
+					completed: batchResult.total,
+					succeeded: batchResult.succeeded,
+					failed: batchResult.failed,
 					items: results.map(detailsFrom),
+					verbose: params.verbose ?? false,
+					started: true,
+					batchProgress,
+					batchResult,
+					spinnerTick: 0,
 					toolOutputTruncated: output.truncated,
 				},
 			};
@@ -372,10 +586,12 @@ export default function registerJouzuWebfetch(pi: ExtensionAPI): void {
 
 export const __test__ = {
 	batchResponseText,
+	batchResultDetails,
 	createBatchWebFetchTool,
 	createWebFetchTool,
 	detailsFrom,
 	responseText,
+	singleToolDetails,
 	runBatch,
 	truncateToolOutput,
 };
