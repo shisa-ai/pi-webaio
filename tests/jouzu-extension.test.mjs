@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import registerJouzuWebfetch from "../src/jouzu-extension.ts";
+import registerJouzuWebfetch, { __test__ } from "../src/jouzu-extension.ts";
 
 function registerTools() {
 	const tools = [];
@@ -46,6 +46,52 @@ test("batch_web_fetch preserves request order and isolates failures", async () =
 	assert.equal(result.details.failed, 2);
 	assert.match(result.content[0].text, /## 1\. file:\/\/\/first/);
 	assert.match(result.content[0].text, /## 2\. ftp:\/\/example\.test\/second/);
+});
+
+test("tool output is bounded by bytes and lines without splitting Unicode", () => {
+	for (const input of ["🙂".repeat(20_000), Array.from({ length: 3_000 }, () => "line").join("\n")]) {
+		const result = __test__.truncateToolOutput(input);
+		assert.equal(result.truncated, true);
+		assert.ok(Buffer.byteLength(result.text, "utf8") <= 50_000);
+		assert.ok(result.text.split("\n").length <= 2_000);
+		assert.match(result.text, /Tool output truncated/);
+		assert.doesNotMatch(result.text, /�/);
+	}
+});
+
+test("request credentials are absent from updates, results, and rendering", async () => {
+	const [tool] = registerTools();
+	const updates = [];
+	const secretUrl = "https://user:password@example.test/?access_token=abc";
+	const result = await tool.execute("call-secret", { url: secretUrl }, undefined, (update) => updates.push(update));
+	const rendered = tool.renderCall(
+		{ url: secretUrl },
+		{ fg(_color, text) { return text; } },
+	).render(200).join("\n");
+	for (const value of [JSON.stringify(updates), JSON.stringify(result), rendered]) {
+		assert.doesNotMatch(value, /password|access_token=abc/);
+	}
+});
+
+test("batch cancellation stops workers before queued requests start", async () => {
+	const controller = new AbortController();
+	const requests = Array.from({ length: 20 }, (_, index) => ({ url: `https://example.test/${index}` }));
+	let started = 0;
+	const fakeResult = (url) => ({
+		ok: false,
+		url,
+		redirects: [],
+		elapsedMs: 1,
+		error: { code: "network_error", message: "fixture", phase: "waiting", retryable: true },
+	});
+	const results = await __test__.runBatch(requests, controller.signal, undefined, async (url) => {
+		started += 1;
+		if (started === 1) setTimeout(() => controller.abort(), 0);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		return fakeResult(url);
+	});
+	assert.equal(started, 4);
+	assert.equal(results.filter(Boolean).length, 4);
 });
 
 test("batch_web_fetch schema bounds model-issued batches", () => {

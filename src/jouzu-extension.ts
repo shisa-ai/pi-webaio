@@ -183,6 +183,7 @@ function truncateToolOutput(text: string): { text: string; truncated: boolean } 
 			else high = midpoint - 1;
 		}
 		bounded = bounded.slice(0, low);
+		if (/[\uD800-\uDBFF]$/.test(bounded)) bounded = bounded.slice(0, -1);
 		truncated = true;
 	}
 	return truncated ? { text: `${bounded}${notice}`, truncated: true } : { text: bounded, truncated: false };

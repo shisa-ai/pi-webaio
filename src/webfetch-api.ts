@@ -1181,8 +1181,10 @@ export function redactStaticWebFetchUrl(value: unknown): string {
 	const text = typeof value === "string" ? value : String(value);
 	try {
 		const parsed = new URL(text);
-		if (parsed.username) parsed.username = "[REDACTED]";
-		if (parsed.password) parsed.password = "[REDACTED]";
+		if (parsed.username || parsed.password) {
+			parsed.username = "";
+			parsed.password = "";
+		}
 		for (const name of [...parsed.searchParams.keys()]) {
 			let decoded = name;
 			try {

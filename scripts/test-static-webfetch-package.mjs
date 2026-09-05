@@ -58,10 +58,20 @@ try {
 	};
 	run(
 		npm,
-		["install", "--ignore-scripts", "--omit=peer", tarball],
+		["install", "--ignore-scripts", "--omit=peer", tarball, "@earendil-works/pi-tui@0.85.0"],
 		consumer,
 		isolatedEnv,
 	);
+	writeFileSync(
+		join(consumer, "adapter-smoke.mjs"),
+		`import assert from "node:assert/strict";
+const { default: register } = await import("./node_modules/pi-webaio/dist/src/jouzu-extension.js");
+const tools = [];
+register({ registerTool(tool) { tools.push(tool.name); } });
+assert.deepEqual(tools, ["web_fetch", "batch_web_fetch"]);
+`,
+	);
+	run(process.execPath, ["adapter-smoke.mjs"], consumer, isolatedEnv);
 
 	// The static entrypoint must load without either browser implementation or
 	// pi's host-provided peer packages. Keep wreq's platform binding installed.
