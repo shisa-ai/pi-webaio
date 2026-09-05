@@ -39,7 +39,8 @@
     "./webfetch": {
       "types": "./dist/src/webfetch.d.ts",
       "import": "./dist/src/webfetch.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "imports": {
     "#stealth-script": "./extractors/stealth-script.mjs"
@@ -54,6 +55,7 @@
   },
   "files": [
     "dist/",
+    "src/",
     "bin/",
     "pi-entry.mjs",
     "extractors/",
