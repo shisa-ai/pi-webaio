@@ -39,6 +39,7 @@ function filesBelow(directory, prefix = "") {
 try {
 	run(npm, ["run", "build:dist"], root);
 	const pack = JSON.parse(run(npm, ["pack", "--json", "--ignore-scripts"], root));
+	assert.ok(pack[0].files.some((file) => file.path === "dist/src/jouzu-extension.js"));
 	tarball = resolve(root, pack[0].filename);
 	const consumer = join(temp, "consumer");
 	const state = join(temp, "state");

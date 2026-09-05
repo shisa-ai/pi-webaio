@@ -446,7 +446,7 @@ function parseHttpUrl(value: string, label = "URL"): URL {
 	try {
 		parsed = new URL(value);
 	} catch {
-		throw new StaticFetchException("invalid_url", `Invalid ${label}: ${redactUrl(value)}`, {
+		throw new StaticFetchException("invalid_url", `Invalid ${label}: ${redactStaticWebFetchUrl(value)}`, {
 			phase: "validation",
 		});
 	}
@@ -1177,7 +1177,7 @@ function redactCredentialPairs(value: string): string {
 	);
 }
 
-function redactUrl(value: unknown): string {
+export function redactStaticWebFetchUrl(value: unknown): string {
 	const text = typeof value === "string" ? value : String(value);
 	try {
 		const parsed = new URL(text);
@@ -1205,7 +1205,7 @@ function redactErrorText(value: unknown): string {
 	const text = typeof value === "string" ? value : String(value);
 	const urlsRedacted = text.replace(
 		/https?:\/\/[^\s<>"']+/gi,
-		(candidate) => redactUrl(candidate),
+		(candidate) => redactStaticWebFetchUrl(candidate),
 	);
 	return redactSecrets(redactCredentialPairs(urlsRedacted));
 }
@@ -1218,9 +1218,9 @@ function failureResult(
 	if (error instanceof StaticFetchException) {
 		return {
 			ok: false,
-			url: redactUrl(url),
-			finalUrl: error.finalUrl ? redactUrl(error.finalUrl) : undefined,
-			redirects: error.redirects.map((redirect) => redactUrl(redirect)),
+			url: redactStaticWebFetchUrl(url),
+			finalUrl: error.finalUrl ? redactStaticWebFetchUrl(error.finalUrl) : undefined,
+			redirects: error.redirects.map((redirect) => redactStaticWebFetchUrl(redirect)),
 			elapsedMs: Date.now() - startedAt,
 			error: {
 				code: error.code,
@@ -1236,7 +1236,7 @@ function failureResult(
 	const timedOut = value?.code === "ETIMEDOUT" || /timed out/i.test(message);
 	return {
 		ok: false,
-		url: redactUrl(url),
+		url: redactStaticWebFetchUrl(url),
 		redirects: [],
 		elapsedMs: Date.now() - startedAt,
 		error: {
@@ -1466,9 +1466,9 @@ async function createResult(
 	return {
 		ok: true,
 		kind: "content",
-		url: redactUrl(originalUrl),
-		finalUrl: redactUrl(downloaded.url),
-		redirects: downloaded.redirects.map((redirect) => redactUrl(redirect)),
+		url: redactStaticWebFetchUrl(originalUrl),
+		finalUrl: redactStaticWebFetchUrl(downloaded.url),
+		redirects: downloaded.redirects.map((redirect) => redactStaticWebFetchUrl(redirect)),
 		statusCode: downloaded.status,
 		statusText: downloaded.statusText,
 		contentType,
